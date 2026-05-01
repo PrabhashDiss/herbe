@@ -71,17 +71,22 @@ int get_max_len(char *string, XftFont *font, int max_text_width)
 		return ++eol;
 }
 
-void read_y_offset(unsigned int **offset, int *id)
+typedef struct {
+	unsigned int y;
+	unsigned int col;
+} Offset;
+
+void read_offset(Offset **offset, int *id)
 {
-	int shm_id = shmget(8432, sizeof(unsigned int), IPC_CREAT | 0660);
+	int shm_id = shmget(8432, sizeof(Offset), IPC_CREAT | 0660);
 	if (shm_id == -1) die("shmget failed");
 
-	*offset = (unsigned int *)shmat(shm_id, 0, 0);
-	if (*offset == (unsigned int *)-1) die("shmat failed");
+	*offset = (Offset *)shmat(shm_id, 0, 0);
+	if (*offset == (Offset *)-1) die("shmat failed");
 	*id = shm_id;
 }
 
-void free_y_offset(int id)
+void free_offset(int id)
 {
 	shmctl(id, IPC_RMID, NULL);
 }
@@ -164,19 +169,29 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	int y_offset_id;
-	unsigned int *y_offset;
-	read_y_offset(&y_offset, &y_offset_id);
+	int offset_id;
+	Offset *offset;
+	read_offset(&offset, &offset_id);
 
 	unsigned int text_height = font->ascent - font->descent;
 	unsigned int height = (num_of_lines - 1) * line_spacing + num_of_lines * text_height + 2 * padding;
-	unsigned int x = pos_x;
-	unsigned int y = pos_y + *y_offset;
 
-	unsigned int used_y_offset = (*y_offset) += height + padding;
+	if (pos_y + offset->y + height + border_size * 2 > (unsigned int)screen_height)
+	{
+		offset->y = 0;
+		offset->col++;
+	}
+
+	unsigned int col = offset->col;
+	unsigned int x = pos_x;
+	unsigned int y = pos_y + offset->y;
+	unsigned int snap_y = (offset->y += height + padding);
+	unsigned int snap_col = col;
 
 	if (corner == TOP_RIGHT || corner == BOTTOM_RIGHT)
-		x = screen_width - width - border_size * 2 - x;
+		x = screen_width - (col + 1) * (width + border_size * 2) - pos_x - col * padding;
+	else
+		x = pos_x + col * (width + border_size * 2 + padding);
 
 	if (corner == BOTTOM_LEFT || corner == BOTTOM_RIGHT)
 		y = screen_height - height - border_size * 2 - y;
@@ -223,7 +238,7 @@ int main(int argc, char *argv[])
 	for (int i = 0; i < num_of_lines; i++)
 		free(lines[i]);
 
-	if (used_y_offset == *y_offset) free_y_offset(y_offset_id);
+	if (offset->y == snap_y && offset->col == snap_col) free_offset(offset_id);
 	free(lines);
 	XftDrawDestroy(draw);
 	XftColorFree(display, visual, colormap, &color);
